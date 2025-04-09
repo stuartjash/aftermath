@@ -6,6 +6,7 @@
 
 import Foundation
 import Accelerate
+import CryptoKit
 
 struct User {
     let username: String
@@ -19,6 +20,35 @@ protocol AMProto {
     var moduleDirRoot: URL { get }
 }
 
+class EncryptedWriter {
+    private let key: SymmetricKey = .init(size: .bits256)
+    private let nonce = AES.GCM.Nonce()
+    static let shared = EncryptedWriter()
+
+    enum EWError: Error {
+        case failedToEncrypt
+        case failedToWrite
+        case emptyData
+    }
+
+    private init() {}
+
+    func encrypt(_ text: String) throws -> Data {
+        guard let data = text.data(using: .utf8) else { throw EWError.emptyData}
+        let sealParameters = try AES.GCM.seal(data, using: key, nonce: nonce)
+        
+
+    }
+
+    func writeKey() {
+        print
+    }
+}
+
+struct FileWriter {
+
+}
+
 class AftermathModule {
     var users: [User]?
     var activeUser = NSUserName()
@@ -26,7 +56,8 @@ class AftermathModule {
     var caseLogSelector: URL
     var caseDirSelector: URL
     var isPretty: Bool = false
-    
+    var encryptionKey = EncryptedWriter.shared.getKey()
+
     init() {
         if Command.options.contains(.analyze) {
             caseLogSelector = CaseFiles.analysisLogFile
@@ -40,6 +71,8 @@ class AftermathModule {
         }
             
         users = getUsersOnSystem()
+
+        print("\(encryptionKey.withUnsafeBytes{Data($0)}.base64EncodedString())")
     }
     
     func getUsersOnSystem() -> [User] {
@@ -112,7 +145,34 @@ class AftermathModule {
         
         return newFile
     }
-    
+
+    private func writeToURL(_ url: URL, _ text: String, _ encrypted:Bool = true) throws {
+        let fileHandle = try FileHandle(forWritingTo: url)
+        fileHandle.seekToEndOfFile()
+
+        var data:Data
+        if encrypted {
+            data = try encrypt(text)
+        }
+        else {
+            data = text.data(using: .utf8)!
+        }
+        fileHandle.write(data)
+        fileHandle.closeFile()
+    }
+
+    private func encrypt(_ text: String) throws -> Data {
+        guard let data = text.data(using: .utf8) else {
+            throw NSError(domain:"ConversionError", code: -1, userInfo: nil)
+        }
+        let sealedBox = try AES.GCM.seal(data, using: encryptionKey)
+        guard let combined = sealedBox.combined else {
+            throw NSError(domain: "EncryptionError", code: -1, userInfo: nil)
+        }
+
+        return combined
+    }
+
     func addTextToFile(atUrl: URL, text: String) {
         if (!FileManager.default.fileExists(atPath: atUrl.relativePath)) {
             let _ = self.createNewCaseFile(dirUrl: atUrl.deletingLastPathComponent(), filename: atUrl.lastPathComponent)
@@ -120,10 +180,7 @@ class AftermathModule {
         
         let textWithNewLine = "\(text)\n"
         do {
-            let fileHandle = try FileHandle(forWritingTo: atUrl)
-                fileHandle.seekToEndOfFile()
-                fileHandle.write(textWithNewLine.data(using: .utf8)!)
-                fileHandle.closeFile()
+            try writeToURL(atUrl, textWithNewLine)
         } catch {
             print("Error writing to file \(error)")
         }
